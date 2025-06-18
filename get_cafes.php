@@ -1,38 +1,15 @@
 <?php
-header("Content-Type: application/json");
-include("db.php");  // 引入連線資料庫的設定
+header('Content-Type: application/json');
 
-$sql = "SELECT 
-    ID, 
-    Name, 
-    City, 
-    Wifi, 
-    Seat, 
-    Quiet, 
-    Tasty, 
-    Cheap, 
-    Music, 
-    Url, 
-    Address, 
-    Latitude, 
-    Longitude, 
-    Limited_time, 
-    Socket, 
-    Standing_desk, 
-    Mrt, 
-    Open_time 
-FROM cafe";  // 你的資料表名稱為 cafe
+// cafes.json 相對於這個 PHP 檔案要在同一個資料夾
+$filename = 'cafes.json';
 
-$result = $conn->query($sql);
-
-$data = array();
-
-if ($result && $result->num_rows > 0) {
-    while ($row = $result->fetch_assoc()) {
-        $data[] = $row;
-    }
+if (!file_exists($filename)) {
+    http_response_code(404);
+    echo json_encode(["error" => "cafes.json not found"]);
+    exit;
 }
 
-echo json_encode($data, JSON_UNESCAPED_UNICODE);
-$conn->close();
+$data = file_get_contents($filename);
+echo $data;
 ?>
