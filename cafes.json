@@ -1,0 +1,22 @@
+[
+  {
+    "id": "cafe001",
+    "name": "星巴克忠孝店",
+    "city": "taipei",
+    "wifi": 5,
+    "seat": 4,
+    "quiet": 3,
+    "tasty": 4,
+    "cheap": 2,
+    "music": 3.5,
+    "url": "https://starbucks.com",
+    "address": "台北市大安區忠孝東路四段",
+    "latitude": 25.0418,
+    "longitude": 121.5469,
+    "limited_time": "no",
+    "socket": "yes",
+    "standing_mrt": "yes",
+    "mrt": "忠孝敦化",
+    "open_time": "07:00–22:00"
+  }
+]
