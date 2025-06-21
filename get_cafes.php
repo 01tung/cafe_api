@@ -1,5 +1,5 @@
 <?php
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=utf-8');
 
 $jsonFile = 'cafes.json';
 
@@ -10,3 +10,4 @@ if (file_exists($jsonFile)) {
     echo json_encode(['error' => 'cafes.json not found']);
 }
 ?>
+

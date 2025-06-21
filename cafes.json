@@ -3,7 +3,6 @@
 {"type":"database","name":"cafe_app"},
 {"type":"table","name":"cafe","database":"cafe_app","data":
 [
-{"ID":"id","Name":"name","City":"city","Wifi":"0","Seat":"0.0","Quiet":"0","Tasty":"0.0","Cheap":"0.0","Music":"0.0","Url":"url","Address":"address","Latitude":"0.000000","longitude":"0.000000","Limited_time":"limit","Socket":"socke","Standing_desk":"sta","Mrt":"mrt","Open_time":"open_time"},
 {"ID":"EF2B005B-E0D1-4991-A","Name":"Belly Daily","City":"taipei","Wifi":"5","Seat":"4.0","Quiet":"4","Tasty":"5.0","Cheap":"3.0","Music":"4.5","Url":"https:\/\/www.facebook.com\/bellydaily\/","Address":"106台北市大安區新生南路三段19巷3號","Latitude":"25.025050","longitude":"121.535370","Limited_time":"","Socket":"maybe","Standing_desk":"no","Mrt":"","Open_time":""},
 {"ID":"178983C7-888A-4C66-B","Name":"雲上咖啡","City":"taipei","Wifi":"5","Seat":"5.0","Quiet":"4","Tasty":"5.0","Cheap":"5.0","Music":"4.0","Url":"https:\/\/www.facebook.com\/%E9%9B%B2%E4%B8%8A%E5%92%96%E5%95%A1-1436636329890947\/?fref=ts","Address":"新北市新店區光明街250號","Latitude":"24.963740","longitude":"121.540480","Limited_time":"maybe","Socket":"yes","Standing_desk":"no","Mrt":"","Open_time":""},
 {"ID":"88D9D2CA-8A58-4002-B","Name":"肆拾肆號館","City":"taipei","Wifi":"5","Seat":"5.0","Quiet":"5","Tasty":"5.0","Cheap":"5.0","Music":"5.0","Url":"https:\/\/www.facebook.com\/44CafeBistro\/","Address":"新北市永和區福和路198巷6號","Latitude":"25.015760","longitude":"121.513650","Limited_time":"maybe","Socket":"maybe","Standing_desk":"yes","Mrt":"頂溪捷運站","Open_time":"連續假期營業至凌晨二點"},
