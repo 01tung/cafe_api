@@ -9,10 +9,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit(0);
 }
 
-include 'db.php';
+// 使用 PDO 連線資料庫
+$host = getenv('DB_HOST') ?: 'localhost';
+$dbname = getenv('DB_NAME') ?: 'your_db';
+$user = getenv('DB_USER') ?: 'root';
+$pass = getenv('DB_PASS') ?: '';
+
+try {
+    $conn = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $pass);
+    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    echo json_encode([
+        'mode' => 'transit',
+        'location' => '',
+        'count' => 0,
+        'results' => [],
+        'error' => 'DB 連線失敗: ' . $e->getMessage()
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 // 讀取捷運站參數
-$station = isset($_GET['station']) ? $conn->real_escape_string($_GET['station']) : '';
+$station = isset($_GET['station']) ? trim($_GET['station']) : '';
 
 if (empty($station)) {
     echo json_encode([
@@ -25,108 +43,72 @@ if (empty($station)) {
     exit;
 }
 
-// 改進的捷運站搜尋邏輯
 // 搜尋 MRT 欄位或地址包含捷運站名稱的咖啡廳
-$sql = "SELECT * FROM cafe WHERE 
-        ((mrt LIKE '%捷運{$station}%' OR 
-          mrt LIKE '%{$station}站%' OR 
-          mrt LIKE '%{$station}%') OR
-         (address LIKE '%{$station}%')) 
-        AND name IS NOT NULL 
-        AND name != '' 
-        AND address IS NOT NULL 
-        AND address != ''
-        ORDER BY 
+try {
+    $stmt = $conn->prepare(
+        "SELECT * FROM cafe 
+         WHERE ((mrt LIKE :station1 OR mrt LIKE :station2 OR mrt LIKE :station3) 
+                OR (address LIKE :station4))
+         AND name IS NOT NULL AND name != ''
+         AND address IS NOT NULL AND address != ''
+         ORDER BY 
             CASE 
-                WHEN mrt LIKE '%捷運{$station}站%' THEN 1
-                WHEN mrt LIKE '%{$station}站%' THEN 2
-                WHEN mrt LIKE '%{$station}%' THEN 3
-                WHEN address LIKE '%{$station}%' THEN 4
+                WHEN mrt LIKE :station2 THEN 1
+                WHEN mrt LIKE :station3 THEN 2
+                WHEN mrt LIKE :station3 THEN 3
+                WHEN address LIKE :station4 THEN 4
                 ELSE 5
-            END,
-            RAND()
-        LIMIT 25";
+            END, RAND()
+         LIMIT 25"
+    );
 
-$result = $conn->query($sql);
-$data = array();
+    $stmt->execute([
+        'station1' => "%捷運$station%",
+        'station2' => "%$station站%",
+        'station3' => "%$station%",
+        'station4' => "%$station%"
+    ]);
 
-if ($result && $result->num_rows > 0) {
-    while($row = $result->fetch_assoc()) {
-        // 格式化資料，保持一致性
-        $formatted_row = [
-            'ID' => $row['id'] ?? $row['ID'] ?? '',
-            'Name' => $row['name'] ?? $row['Name'] ?? '',
-            'City' => $row['city'] ?? $row['City'] ?? '',
-            'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
-            'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
-            'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
-            'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
-            'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
-            'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
-            'Url' => $row['url'] ?? $row['Url'] ?? '',
-            'Address' => $row['address'] ?? $row['Address'] ?? '',
-            'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
-            'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
-            'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
-            'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
-            'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
-            'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
-            'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
-        ];
-        $data[] = $formatted_row;
-    }
-}
+    $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 如果沒有找到結果，嘗試更寬泛的搜尋
-if (empty($data)) {
-    // 移除"站"字後再搜尋
-    $station_without_suffix = str_replace(['站', '捷運'], '', $station);
-    if (!empty($station_without_suffix) && $station_without_suffix !== $station) {
-        $backup_sql = "SELECT * FROM cafe WHERE 
-                       (mrt LIKE '%{$station_without_suffix}%' OR 
-                        address LIKE '%{$station_without_suffix}%' OR
-                        city LIKE '%{$station_without_suffix}%')
-                       AND name IS NOT NULL 
-                       AND name != ''
-                       ORDER BY RAND()
-                       LIMIT 20";
-        
-        $backup_result = $conn->query($backup_sql);
-        if ($backup_result && $backup_result->num_rows > 0) {
-            while($row = $backup_result->fetch_assoc()) {
-                $formatted_row = [
-                    'ID' => $row['id'] ?? $row['ID'] ?? '',
-                    'Name' => $row['name'] ?? $row['Name'] ?? '',
-                    'City' => $row['city'] ?? $row['City'] ?? '',
-                    'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
-                    'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
-                    'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
-                    'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
-                    'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
-                    'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
-                    'Url' => $row['url'] ?? $row['Url'] ?? '',
-                    'Address' => $row['address'] ?? $row['Address'] ?? '',
-                    'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
-                    'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
-                    'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
-                    'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
-                    'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
-                    'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
-                    'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
-                ];
-                $data[] = $formatted_row;
+    // 如果沒有找到結果，嘗試更寬泛的搜尋
+    if (count($data) < 5) {
+        $station_without_suffix = str_replace(['站', '捷運'], '', $station);
+        if (!empty($station_without_suffix) && $station_without_suffix !== $station) {
+            $backup_stmt = $conn->prepare(
+                "SELECT * FROM cafe 
+                 WHERE (mrt LIKE :station OR address LIKE :station OR city LIKE :station)
+                 AND name IS NOT NULL AND name != ''
+                 ORDER BY RAND()
+                 LIMIT 20"
+            );
+            $backup_stmt->execute(['station' => "%$station_without_suffix%"]);
+            $backup_data = $backup_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 合併避免重複
+            $existing_ids = array_column($data, 'ID');
+            foreach ($backup_data as $row) {
+                if (!in_array($row['ID'], $existing_ids)) {
+                    $data[] = $row;
+                }
             }
         }
     }
+
+    echo json_encode([
+        'mode' => 'transit',
+        'location' => $station,
+        'count' => count($data),
+        'results' => $data
+    ], JSON_UNESCAPED_UNICODE);
+
+} catch (PDOException $e) {
+    echo json_encode([
+        'mode' => 'transit',
+        'location' => $station,
+        'count' => 0,
+        'results' => [],
+        'error' => '查詢失敗: ' . $e->getMessage()
+    ], JSON_UNESCAPED_UNICODE);
 }
-
-// 回傳標準格式
-$response = [
-    'mode' => 'transit',
-    'location' => $station,
-    'count' => count($data),
-    'results' => $data
-];
-
-echo json_encode($response, JSON_UNESCAPED_UNICODE);
 ?>
