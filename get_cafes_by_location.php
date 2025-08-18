@@ -9,10 +9,28 @@ if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     exit(0);
 }
 
-include 'db.php';
+// 使用 PDO 連線資料庫，建議用環境變數
+$host = getenv('DB_HOST') ?: 'localhost';
+$dbname = getenv('DB_NAME') ?: 'your_db';
+$user = getenv('DB_USER') ?: 'root';
+$pass = getenv('DB_PASS') ?: '';
+
+try {
+    $conn = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $pass);
+    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    echo json_encode([
+        'mode' => 'address',
+        'location' => '',
+        'count' => 0,
+        'results' => [],
+        'error' => 'DB 連線失敗: ' . $e->getMessage()
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 // 讀取 GET 參數 location
-$location = isset($_GET['location']) ? $conn->real_escape_string($_GET['location']) : '';
+$location = isset($_GET['location']) ? trim($_GET['location']) : '';
 
 if ($location === '') {
     echo json_encode([
@@ -25,114 +43,63 @@ if ($location === '') {
     exit;
 }
 
-// 改進的搜尋邏輯，增加更多搜尋條件提高命中率
-$sql = "SELECT * FROM cafe WHERE 
-        (city LIKE '%$location%' OR 
-         address LIKE '%$location%' OR 
-         name LIKE '%$location%') 
-        AND name IS NOT NULL 
-        AND name != '' 
-        AND address IS NOT NULL 
-        AND address != ''
-        ORDER BY 
+// 改進的搜尋邏輯
+try {
+    $stmt = $conn->prepare(
+        "SELECT * FROM cafe 
+         WHERE (city LIKE :location OR address LIKE :location OR name LIKE :location)
+         AND name IS NOT NULL AND name != ''
+         AND address IS NOT NULL AND address != ''
+         ORDER BY 
             CASE 
-                WHEN address LIKE '%$location%' THEN 1
-                WHEN city LIKE '%$location%' THEN 2
+                WHEN address LIKE :location THEN 1
+                WHEN city LIKE :location THEN 2
                 ELSE 3
-            END,
-            RAND()
-        LIMIT 25";
+            END, RAND()
+         LIMIT 25"
+    );
+    $stmt->execute(['location' => "%$location%"]);
+    $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$result = $conn->query($sql);
-$data = array();
+    // 如果結果太少，做更寬泛搜尋
+    if (count($data) < 5) {
+        $broad_location = str_replace(['區', '市', '縣'], '', $location);
+        if ($broad_location !== $location && strlen($broad_location) >= 2) {
+            $backup_stmt = $conn->prepare(
+                "SELECT * FROM cafe 
+                 WHERE (city LIKE :broad OR address LIKE :broad) 
+                 AND name IS NOT NULL AND name != ''
+                 ORDER BY RAND()
+                 LIMIT 15"
+            );
+            $backup_stmt->execute(['broad' => "%$broad_location%"]);
+            $backup_data = $backup_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-if ($result && $result->num_rows > 0) {
-    while($row = $result->fetch_assoc()) {
-        // 轉換資料型別，保持與原有格式相容
-        $formatted_row = [
-            'ID' => $row['id'] ?? $row['ID'] ?? '',
-            'Name' => $row['name'] ?? $row['Name'] ?? '',
-            'City' => $row['city'] ?? $row['City'] ?? '',
-            'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
-            'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
-            'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
-            'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
-            'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
-            'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
-            'Url' => $row['url'] ?? $row['Url'] ?? '',
-            'Address' => $row['address'] ?? $row['Address'] ?? '',
-            'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
-            'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
-            'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
-            'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
-            'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
-            'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
-            'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
-        ];
-        $data[] = $formatted_row;
-    }
-}
-
-// 如果結果太少，嘗試更寬泛的搜尋
-if (count($data) < 5) {
-    // 去掉區域後綴，進行更寬泛搜尋
-    $broad_location = str_replace(['區', '市', '縣'], '', $location);
-    if ($broad_location !== $location && strlen($broad_location) >= 2) {
-        $backup_sql = "SELECT * FROM cafe WHERE 
-                       (city LIKE '%$broad_location%' OR 
-                        address LIKE '%$broad_location%') 
-                       AND name IS NOT NULL 
-                       AND name != ''
-                       ORDER BY RAND() 
-                       LIMIT 15";
-        
-        $backup_result = $conn->query($backup_sql);
-        if ($backup_result && $backup_result->num_rows > 0) {
-            while($row = $backup_result->fetch_assoc()) {
-                $formatted_row = [
-                    'ID' => $row['id'] ?? $row['ID'] ?? '',
-                    'Name' => $row['name'] ?? $row['Name'] ?? '',
-                    'City' => $row['city'] ?? $row['City'] ?? '',
-                    'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
-                    'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
-                    'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
-                    'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
-                    'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
-                    'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
-                    'Url' => $row['url'] ?? $row['Url'] ?? '',
-                    'Address' => $row['address'] ?? $row['Address'] ?? '',
-                    'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
-                    'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
-                    'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
-                    'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
-                    'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
-                    'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
-                    'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
-                ];
-                
-                // 避免重複
-                $duplicate = false;
-                foreach ($data as $existing) {
-                    if ($existing['ID'] === $formatted_row['ID']) {
-                        $duplicate = true;
-                        break;
-                    }
-                }
-                if (!$duplicate) {
-                    $data[] = $formatted_row;
+            // 合併避免重複
+            $existing_ids = array_column($data, 'ID');
+            foreach ($backup_data as $row) {
+                if (!in_array($row['ID'], $existing_ids)) {
+                    $data[] = $row;
                 }
             }
         }
     }
+
+    echo json_encode([
+        'mode' => 'address',
+        'location' => $location,
+        'count' => count($data),
+        'results' => $data
+    ], JSON_UNESCAPED_UNICODE);
+
+} catch (PDOException $e) {
+    echo json_encode([
+        'mode' => 'address',
+        'location' => $location,
+        'count' => 0,
+        'results' => [],
+        'error' => '查詢失敗: ' . $e->getMessage()
+    ], JSON_UNESCAPED_UNICODE);
 }
-
-// 回傳標準格式
-$response = [
-    'mode' => 'address',
-    'location' => $location,
-    'count' => count($data),
-    'results' => $data
-];
-
-echo json_encode($response, JSON_UNESCAPED_UNICODE);
 ?>
+
