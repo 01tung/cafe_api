@@ -1,122 +1,138 @@
 <?php
-header('Content-Type: application/json; charset=utf-8');
+header("Content-Type: application/json; charset=UTF-8");
 header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
 
-// 參數
-$lat     = isset($_GET['lat']) ? floatval($_GET['lat']) : null;
-$lng     = isset($_GET['lng']) ? floatval($_GET['lng']) : null;
-$radius  = isset($_GET['radius']) ? floatval($_GET['radius']) : 1000.0; // 公尺
-$keyword = isset($_GET['location']) ? trim($_GET['location']) : '';
-$pretty  = isset($_GET['pretty']) ? (int)$_GET['pretty'] === 1 : false;
-$jsonOpt = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | ($pretty ? JSON_PRETTY_PRINT : 0);
-
-// 讀 JSON
-$jsonPath = __DIR__ . '/cafes.json';
-if (!file_exists($jsonPath)) {
-  http_response_code(500);
-  echo json_encode(['error' => '找不到 cafes.json'], $jsonOpt);
-  exit;
-}
-$raw = file_get_contents($jsonPath);
-$data = json_decode($raw, true);
-if ($data === null) {
-  http_response_code(500);
-  echo json_encode(['error' => 'cafes.json 解析失敗'], $jsonOpt);
-  exit;
+// 處理 OPTIONS 請求
+if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+    exit(0);
 }
 
-/**
- * 從多種可能的結構取出「店家陣列」
- * - 直接就是陣列
- * - {'data': [...]} 包一層
- * - phpMyAdmin 匯出：頂層是 array，找出 {"type":"table","data":[...]} 的 data
- */
-function extract_cafes($data) {
-  if (isset($data['data']) && is_array($data['data'])) return $data['data'];
-  if (is_array($data)) {
-    // 可能已經是店家陣列
-    $looksLikeCafe = fn($row) =>
-      is_array($row) && (isset($row['latitude']) || isset($row['Latitude'])) &&
-      (isset($row['longitude']) || isset($row['Longitude']));
-    $allCafe = !empty($data) && array_reduce($data, fn($carry,$r)=> $carry && is_array($r), true)
-             && array_reduce(array_slice($data,0,20), fn($carry,$r)=> $carry || $looksLikeCafe($r), false);
-    if ($allCafe) return $data;
+include 'db.php';
 
-    // phpMyAdmin 匯出格式：在頂層 array 裡找 type=table 的 data
-    foreach ($data as $item) {
-      if (is_array($item) && isset($item['type']) && $item['type']==='table' && isset($item['data']) && is_array($item['data'])) {
-        return $item['data'];
-      }
+// 讀取 GET 參數 location
+$location = isset($_GET['location']) ? $conn->real_escape_string($_GET['location']) : '';
+
+if ($location === '') {
+    echo json_encode([
+        'mode' => 'address',
+        'location' => '',
+        'count' => 0,
+        'results' => [],
+        'error' => '請提供搜尋地點'
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 改進的搜尋邏輯，增加更多搜尋條件提高命中率
+$sql = "SELECT * FROM cafe WHERE 
+        (city LIKE '%$location%' OR 
+         address LIKE '%$location%' OR 
+         name LIKE '%$location%') 
+        AND name IS NOT NULL 
+        AND name != '' 
+        AND address IS NOT NULL 
+        AND address != ''
+        ORDER BY 
+            CASE 
+                WHEN address LIKE '%$location%' THEN 1
+                WHEN city LIKE '%$location%' THEN 2
+                ELSE 3
+            END,
+            RAND()
+        LIMIT 25";
+
+$result = $conn->query($sql);
+$data = array();
+
+if ($result && $result->num_rows > 0) {
+    while($row = $result->fetch_assoc()) {
+        // 轉換資料型別，保持與原有格式相容
+        $formatted_row = [
+            'ID' => $row['id'] ?? $row['ID'] ?? '',
+            'Name' => $row['name'] ?? $row['Name'] ?? '',
+            'City' => $row['city'] ?? $row['City'] ?? '',
+            'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
+            'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
+            'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
+            'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
+            'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
+            'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
+            'Url' => $row['url'] ?? $row['Url'] ?? '',
+            'Address' => $row['address'] ?? $row['Address'] ?? '',
+            'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
+            'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
+            'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
+            'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
+            'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
+            'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
+            'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
+        ];
+        $data[] = $formatted_row;
     }
-  }
-  return [];
 }
 
-$cafes = extract_cafes($data);
-
-// 小工具
-function distance_m($lat1,$lon1,$lat2,$lon2){
-  $R=6371000; $dLat=deg2rad($lat2-$lat1); $dLon=deg2rad($lon2-$lon1);
-  $a=sin($dLat/2)**2+cos(deg2rad($lat1))*cos(deg2rad($lat2))*sin($dLon/2)**2;
-  return 2*$R*atan2(sqrt($a), sqrt(1-$a));
-}
-$hasMb = function_exists('mb_stripos');
-$contains = function($hay,$nd) use($hasMb){
-  $hay=(string)$hay; $nd=(string)$nd;
-  if ($nd==='') return true;
-  return $hasMb ? (mb_stripos($hay,$nd,0,'UTF-8')!==false) : (stripos($hay,$nd)!==false);
-};
-
-// 模式 A：lat/lng 搜附近
-if ($lat !== null && $lng !== null) {
-  $out = [];
-  foreach ($cafes as $row) {
-    if (!is_array($row)) continue;
-    $clat = isset($row['Latitude']) ? floatval($row['Latitude'])
-          : (isset($row['latitude']) ? floatval($row['latitude']) : null);
-    $clng = isset($row['longitude']) ? floatval($row['longitude'])
-          : (isset($row['Longitude']) ? floatval($row['Longitude']) : null);
-    if ($clat===null || $clng===null) continue;
-
-    $d = distance_m($lat,$lng,$clat,$clng);
-    if ($d <= $radius) {
-      // 型別盡量轉好
-      foreach ([
-        'wifi'=>'int','Wifi'=>'int',
-        'seat'=>'float','Seat'=>'float',
-        'quiet'=>'int','Quiet'=>'int',
-        'tasty'=>'float','Tasty'=>'float',
-        'cheap'=>'float','Cheap'=>'float',
-        'music'=>'float','Music'=>'float',
-      ] as $k=>$t) { if(isset($row[$k])) $row[$k]=($t==='int')?intval($row[$k]):floatval($row[$k]); }
-      $row['distance_m'] = round($d,2);
-      $out[] = $row;
+// 如果結果太少，嘗試更寬泛的搜尋
+if (count($data) < 5) {
+    // 去掉區域後綴，進行更寬泛搜尋
+    $broad_location = str_replace(['區', '市', '縣'], '', $location);
+    if ($broad_location !== $location && strlen($broad_location) >= 2) {
+        $backup_sql = "SELECT * FROM cafe WHERE 
+                       (city LIKE '%$broad_location%' OR 
+                        address LIKE '%$broad_location%') 
+                       AND name IS NOT NULL 
+                       AND name != ''
+                       ORDER BY RAND() 
+                       LIMIT 15";
+        
+        $backup_result = $conn->query($backup_sql);
+        if ($backup_result && $backup_result->num_rows > 0) {
+            while($row = $backup_result->fetch_assoc()) {
+                $formatted_row = [
+                    'ID' => $row['id'] ?? $row['ID'] ?? '',
+                    'Name' => $row['name'] ?? $row['Name'] ?? '',
+                    'City' => $row['city'] ?? $row['City'] ?? '',
+                    'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
+                    'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
+                    'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
+                    'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
+                    'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
+                    'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
+                    'Url' => $row['url'] ?? $row['Url'] ?? '',
+                    'Address' => $row['address'] ?? $row['Address'] ?? '',
+                    'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
+                    'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
+                    'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
+                    'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
+                    'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
+                    'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
+                    'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
+                ];
+                
+                // 避免重複
+                $duplicate = false;
+                foreach ($data as $existing) {
+                    if ($existing['ID'] === $formatted_row['ID']) {
+                        $duplicate = true;
+                        break;
+                    }
+                }
+                if (!$duplicate) {
+                    $data[] = $formatted_row;
+                }
+            }
+        }
     }
-  }
-  usort($out, fn($a,$b)=> ($a['distance_m']??INF) <=> ($b['distance_m']??INF));
-  echo json_encode(['mode'=>'geo','lat'=>$lat,'lng'=>$lng,'radius_m'=>$radius,'count'=>count($out),'results'=>$out], $jsonOpt);
-  exit;
 }
 
-// 模式 B：關鍵字查 city/address
-if ($keyword !== '') {
-  $out = [];
-  foreach ($cafes as $row) {
-    if (!is_array($row)) continue;
-    $city    = (string)($row['City'] ?? $row['city'] ?? '');
-    $address = (string)($row['Address'] ?? $row['address'] ?? '');
-    if ($contains($city,$keyword) || $contains($address,$keyword)) {
-      $out[] = $row;
-    }
-  }
-  echo json_encode(['mode'=>'keyword','location'=>$keyword,'count'=>count($out),'results'=>$out], $jsonOpt);
-  exit;
-}
+// 回傳標準格式
+$response = [
+    'mode' => 'address',
+    'location' => $location,
+    'count' => count($data),
+    'results' => $data
+];
 
-// 沒給必要參數
-http_response_code(400);
-echo json_encode(['error'=>'請提供 lat/lng (+ radius) 或 location 關鍵字其中一種參數'], $jsonOpt);
-
-
-// 回傳結果（與你原本類似：純陣列）
-echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+echo json_encode($response, JSON_UNESCAPED_UNICODE);
+?>

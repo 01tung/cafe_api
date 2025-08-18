@@ -1,118 +1,132 @@
 <?php
 header("Content-Type: application/json; charset=UTF-8");
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
 
-// ✅ 讀取 OpenAI API Key（來自環境變數）
-$apiKey = getenv("OPENAI_API_KEY");
-if (!$apiKey) {
-    echo json_encode(["error" => "缺少 OpenAI API 金鑰，請確認環境變數 OPENAI_API_KEY 是否設定"], JSON_UNESCAPED_UNICODE);
-    exit;
+// 處理 OPTIONS 請求
+if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+    exit(0);
 }
 
-// 讀取前端資料
-$station = $_REQUEST['station'] ?? ''; // 使用者選的捷運站
-$cafesJson = $_REQUEST['cafes'] ?? ''; // 前端傳來的所有咖啡廳 JSON
-$stylePreference = $_REQUEST['style'] ?? '文青'; // 使用者選擇風格
-$timePreference = $_REQUEST['time_preference'] ?? '標準'; // 早鳥/標準/夜貓
+include 'db.php';
+
+// 讀取捷運站參數
+$station = isset($_GET['station']) ? $conn->real_escape_string($_GET['station']) : '';
 
 if (empty($station)) {
-    echo json_encode(["error" => "缺少 station 參數"], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-if (empty($cafesJson)) {
-    echo json_encode(["error" => "缺少 cafes 參數"], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 解析咖啡廳 JSON
-$cafes = json_decode($cafesJson, true);
-if (json_last_error() !== JSON_ERROR_NONE) {
-    echo json_encode(["error" => "cafes JSON 解析失敗"], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 篩選符合捷運站前綴的咖啡廳
-$matchedCafes = array_filter($cafes, function($cafe) use ($station) {
-    if (!isset($cafe['Mrt'])) return false;
-    // 只比對站名前綴，不管出口
-    return mb_strpos($cafe['Mrt'], '捷運' . $station) === 0;
-});
-
-if (empty($matchedCafes)) {
     echo json_encode([
-        "mode" => "mrt",
-        "station" => $station,
-        "count" => 0,
-        "results" => [],
-        "error" => "此捷運站無符合的咖啡廳"
-    ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        'mode' => 'transit',
+        'location' => '',
+        'count' => 0,
+        'results' => [],
+        'error' => '請提供捷運站名稱'
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// 把篩選後的咖啡廳再轉成 JSON
-$matchedCafesJson = json_encode(array_values($matchedCafes), JSON_UNESCAPED_UNICODE);
+// 改進的捷運站搜尋邏輯
+// 搜尋 MRT 欄位或地址包含捷運站名稱的咖啡廳
+$sql = "SELECT * FROM cafe WHERE 
+        ((mrt LIKE '%捷運{$station}%' OR 
+          mrt LIKE '%{$station}站%' OR 
+          mrt LIKE '%{$station}%') OR
+         (address LIKE '%{$station}%')) 
+        AND name IS NOT NULL 
+        AND name != '' 
+        AND address IS NOT NULL 
+        AND address != ''
+        ORDER BY 
+            CASE 
+                WHEN mrt LIKE '%捷運{$station}站%' THEN 1
+                WHEN mrt LIKE '%{$station}站%' THEN 2
+                WHEN mrt LIKE '%{$station}%' THEN 3
+                WHEN address LIKE '%{$station}%' THEN 4
+                ELSE 5
+            END,
+            RAND()
+        LIMIT 25";
 
-// 時間偏好設定
-$timeSettings = [
-    "早鳥" => ["start" => "09:00", "end" => "18:00"],
-    "標準" => ["start" => "10:00", "end" => "20:00"],
-    "夜貓" => ["start" => "13:00", "end" => "23:00"]
+$result = $conn->query($sql);
+$data = array();
+
+if ($result && $result->num_rows > 0) {
+    while($row = $result->fetch_assoc()) {
+        // 格式化資料，保持一致性
+        $formatted_row = [
+            'ID' => $row['id'] ?? $row['ID'] ?? '',
+            'Name' => $row['name'] ?? $row['Name'] ?? '',
+            'City' => $row['city'] ?? $row['City'] ?? '',
+            'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
+            'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
+            'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
+            'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
+            'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
+            'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
+            'Url' => $row['url'] ?? $row['Url'] ?? '',
+            'Address' => $row['address'] ?? $row['Address'] ?? '',
+            'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
+            'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
+            'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
+            'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
+            'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
+            'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
+            'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
+        ];
+        $data[] = $formatted_row;
+    }
+}
+
+// 如果沒有找到結果，嘗試更寬泛的搜尋
+if (empty($data)) {
+    // 移除"站"字後再搜尋
+    $station_without_suffix = str_replace(['站', '捷運'], '', $station);
+    if (!empty($station_without_suffix) && $station_without_suffix !== $station) {
+        $backup_sql = "SELECT * FROM cafe WHERE 
+                       (mrt LIKE '%{$station_without_suffix}%' OR 
+                        address LIKE '%{$station_without_suffix}%' OR
+                        city LIKE '%{$station_without_suffix}%')
+                       AND name IS NOT NULL 
+                       AND name != ''
+                       ORDER BY RAND()
+                       LIMIT 20";
+        
+        $backup_result = $conn->query($backup_sql);
+        if ($backup_result && $backup_result->num_rows > 0) {
+            while($row = $backup_result->fetch_assoc()) {
+                $formatted_row = [
+                    'ID' => $row['id'] ?? $row['ID'] ?? '',
+                    'Name' => $row['name'] ?? $row['Name'] ?? '',
+                    'City' => $row['city'] ?? $row['City'] ?? '',
+                    'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
+                    'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
+                    'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
+                    'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
+                    'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
+                    'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
+                    'Url' => $row['url'] ?? $row['Url'] ?? '',
+                    'Address' => $row['address'] ?? $row['Address'] ?? '',
+                    'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
+                    'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
+                    'Limited_time' => $row['limited_time'] ?? $row['Limited_time'] ?? '',
+                    'Socket' => $row['socket'] ?? $row['Socket'] ?? '',
+                    'Standing_desk' => $row['standing_desk'] ?? $row['Standing_desk'] ?? '',
+                    'Mrt' => $row['mrt'] ?? $row['Mrt'] ?? '',
+                    'Open_time' => $row['open_time'] ?? $row['Open_time'] ?? ''
+                ];
+                $data[] = $formatted_row;
+            }
+        }
+    }
+}
+
+// 回傳標準格式
+$response = [
+    'mode' => 'transit',
+    'location' => $station,
+    'count' => count($data),
+    'results' => $data
 ];
-$startTime = $timeSettings[$timePreference]["start"] ?? "10:00";
-$endTime = $timeSettings[$timePreference]["end"] ?? "20:00";
 
-// GPT Prompt
-$prompt = "你是一個專業旅遊規劃師，請根據使用者偏好與場所清單生成一日行程。
-規則：
-1. 上午安排 1 間咖啡廳，下午安排 1 間咖啡廳。
-2. 其他時間安排與使用者偏好/活動風格型相關的場所，GPT 自行分析推薦。
-3. 所有安排符合使用者選擇的時間偏好：{$timePreference}，時間從 {$startTime} 到 {$endTime}。
-4. 使用者風格：{$stylePreference}。
-5. 可選咖啡廳清單：{$matchedCafesJson}。";
-
-// 呼叫 OpenAI API
-$ch = curl_init();
-curl_setopt($ch, CURLOPT_URL, "https://api.openai.com/v1/chat/completions");
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    "Content-Type: application/json",
-    "Authorization: Bearer {$apiKey}"
-]);
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
-    "model" => "gpt-3.5-turbo",
-    "messages" => [
-        ["role" => "system", "content" => "你是一個專業的旅遊行程規劃師，能依據使用者偏好與場所資訊推薦行程。"],
-        ["role" => "user", "content" => $prompt]
-    ],
-    "temperature" => 0.8
-]));
-
-$response = curl_exec($ch);
-if (curl_errno($ch)) {
-    echo json_encode(["error" => curl_error($ch)], JSON_UNESCAPED_UNICODE);
-    curl_close($ch);
-    exit;
-}
-curl_close($ch);
-
-// 解析回傳
-$data = json_decode($response, true);
-$reply = $data['choices'][0]['message']['content'] ?? null;
-
-if (!$reply) {
-    echo json_encode(["error" => "OpenAI 沒有回應"], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 嘗試解析 GPT 回傳的 JSON
-$itineraryData = json_decode($reply, true);
-if (json_last_error() !== JSON_ERROR_NONE) {
-    // GPT 沒照 JSON 格式回
-    echo json_encode(["raw_text" => $reply], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 成功解析，回傳給前端
-echo json_encode($itineraryData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+echo json_encode($response, JSON_UNESCAPED_UNICODE);
 ?>
