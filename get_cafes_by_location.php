@@ -1,138 +1,58 @@
 <?php
 header("Content-Type: application/json; charset=UTF-8");
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
 
-// 處理 OPTIONS 請求
-if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
-    exit(0);
+// 取得 GET 參數
+$city = $_GET['city'] ?? '';
+$district = $_GET['district'] ?? '';
+$road = $_GET['road'] ?? '';
+$preferences = isset($_GET['preferences']) ? explode(',', $_GET['preferences']) : [];
+
+// 讀取 cafes.json
+$data = json_decode(file_get_contents('cafes.json'), true);
+
+// 轉換 0/1 -> true/false，符合你的資料規則
+foreach ($data as &$cafe) {
+    $cafe['limited_time'] = $cafe['limited_time'] == 0;    // 0 = 不限時 → true
+    $cafe['socket'] = $cafe['socket'] == 1;                // 1 = 有插座 → true
+    $cafe['minimum_charge'] = $cafe['minimum_charge'] == 0; // 0 = 無低消 → true
+    $cafe['pet_friendly'] = $cafe['pet_friendly'] == 1;    // 1 = 寵物友善 → true
+    $cafe['outdoor_seating'] = $cafe['outdoor_seating'] == 1; // 1 = 有戶外座位 → true
 }
+unset($cafe);
 
-// MySQLi 連線設定
-$host = getenv('DB_HOST') ?: 'localhost';
-$dbname = getenv('DB_NAME') ?: 'your_db';
-$user = getenv('DB_USER') ?: 'root';
-$pass = getenv('DB_PASS') ?: '';
+// 篩選函式
+$results = array_filter($data, function($cafe) use ($city, $district, $road, $preferences){
+    // 地址匹配：縣市 + 區域 + 路名（路名可不填）
+    if ($city && stripos($cafe['city'], $city) === false) return false;
+    if ($district && stripos($cafe['address'], $district) === false) return false;
+    if ($road && stripos($cafe['address'], $road) === false) return false;
 
-$conn = new mysqli($host, $user, $pass, $dbname);
-if ($conn->connect_error) {
-    echo json_encode([
-        'mode' => 'address',
-        'location' => '',
-        'count' => 0,
-        'results' => [],
-        'error' => 'DB 連線失敗: ' . $conn->connect_error
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 讀取 GET 參數 location
-$location = isset($_GET['location']) ? $conn->real_escape_string(trim($_GET['location'])) : '';
-
-if ($location === '') {
-    echo json_encode([
-        'mode' => 'address',
-        'location' => '',
-        'count' => 0,
-        'results' => [],
-        'error' => '請提供搜尋地點'
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// 主搜尋
-$sql = "SELECT * FROM cafe 
-        WHERE (city LIKE '%$location%' OR address LIKE '%$location%' OR name LIKE '%$location%')
-        AND name IS NOT NULL AND name != ''
-        AND address IS NOT NULL AND address != ''
-        ORDER BY 
-            CASE 
-                WHEN address LIKE '%$location%' THEN 1
-                WHEN city LIKE '%$location%' THEN 2
-                ELSE 3
-            END,
-            RAND()
-        LIMIT 25";
-
-$result = $conn->query($sql);
-$data = [];
-
-if ($result && $result->num_rows > 0) {
-    while($row = $result->fetch_assoc()) {
-        $data[] = [
-            'ID' => $row['id'] ?? '',
-            'Name' => $row['name'] ?? '',
-            'City' => $row['city'] ?? '',
-            'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
-            'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
-            'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
-            'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
-            'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
-            'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
-            'Url' => $row['url'] ?? '',
-            'Address' => $row['address'] ?? '',
-            'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
-            'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
-            'Limited_time' => $row['limited_time'] ?? '',
-            'Socket' => $row['socket'] ?? '',
-            'Standing_desk' => $row['standing_desk'] ?? '',
-            'Mrt' => $row['mrt'] ?? '',
-            'Open_time' => $row['open_time'] ?? ''
-        ];
-    }
-}
-
-// 如果結果太少，做更寬泛搜尋
-if (count($data) < 5) {
-    $broad_location = str_replace(['區', '市', '縣'], '', $location);
-    if ($broad_location !== $location && strlen($broad_location) >= 2) {
-        $backup_sql = "SELECT * FROM cafe 
-                       WHERE (city LIKE '%$broad_location%' OR address LIKE '%$broad_location%')
-                       AND name IS NOT NULL AND name != ''
-                       ORDER BY RAND()
-                       LIMIT 15";
-        $backup_result = $conn->query($backup_sql);
-        if ($backup_result && $backup_result->num_rows > 0) {
-            $existing_ids = array_column($data, 'ID');
-            while($row = $backup_result->fetch_assoc()) {
-                if (!in_array($row['id'], $existing_ids)) {
-                    $data[] = [
-                        'ID' => $row['id'] ?? '',
-                        'Name' => $row['name'] ?? '',
-                        'City' => $row['city'] ?? '',
-                        'Wifi' => isset($row['wifi']) ? (intval($row['wifi']) ? 'yes' : 'no') : '',
-                        'Seat' => isset($row['seat']) ? strval(floatval($row['seat'])) : '',
-                        'Quiet' => isset($row['quiet']) ? (intval($row['quiet']) ? 'yes' : 'no') : '',
-                        'Tasty' => isset($row['tasty']) ? strval(floatval($row['tasty'])) : '',
-                        'Cheap' => isset($row['cheap']) ? strval(floatval($row['cheap'])) : '',
-                        'Music' => isset($row['music']) ? strval(floatval($row['music'])) : '',
-                        'Url' => $row['url'] ?? '',
-                        'Address' => $row['address'] ?? '',
-                        'Latitude' => isset($row['latitude']) ? strval(floatval($row['latitude'])) : '',
-                        'longitude' => isset($row['longitude']) ? strval(floatval($row['longitude'])) : '',
-                        'Limited_time' => $row['limited_time'] ?? '',
-                        'Socket' => $row['socket'] ?? '',
-                        'Standing_desk' => $row['standing_desk'] ?? '',
-                        'Mrt' => $row['mrt'] ?? '',
-                        'Open_time' => $row['open_time'] ?? ''
-                    ];
-                }
-            }
+    // 偏好篩選
+    foreach ($preferences as $pref) {
+        switch($pref) {
+            case "不限時":
+                if (!$cafe['limited_time']) return false; // 使用者選不限時，咖啡廳必須不限時
+                break;
+            case "有插座":
+                if (!$cafe['socket']) return false;
+                break;
+            case "無低消":
+                if (!$cafe['minimum_charge']) return false; 
+                break;
+            case "寵物友善":
+                if (!$cafe['pet_friendly']) return false;
+                break;
+            case "戶外座位":
+                if (!$cafe['outdoor_seating']) return false;
+                break;
         }
     }
-}
+
+    return true;
+});
 
 // 回傳 JSON
-$response = [
-    'mode' => 'address',
-    'location' => $location,
-    'count' => count($data),
-    'results' => $data
-];
+echo json_encode(array_values($results), JSON_UNESCAPED_UNICODE);
 
-echo json_encode($response, JSON_UNESCAPED_UNICODE);
-$conn->close();
-?>
 
 
