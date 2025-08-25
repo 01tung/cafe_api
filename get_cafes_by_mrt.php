@@ -51,3 +51,4 @@ $results = array_filter($data, function($cafe) use ($mrt, $preferences){
 // 回傳結果
 echo json_encode(array_values($results), JSON_UNESCAPED_UNICODE);
 
+
