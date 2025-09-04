@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: cafe-api
+    env: docker
+    plan: free
+    branch: master
+    repo: https://github.com/01tung/cafe_api
